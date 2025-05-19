@@ -36,62 +36,60 @@ if invoice_file and bank_file:
     bank_df = bank_df.dropna(subset=["Narasi", "Credit Transaction"])
 
     expanded_rows = []
+    all_dates_covered = set()
     for _, row in bank_df.iterrows():
         dates = extract_dates(row["Narasi"])
         if len(dates) == 1:
-            expanded_rows.append({'tanggal': dates[0], 'kredit': row["Credit Transaction"], 'narasi': row["Narasi"]})
+            d = dates[0]
+            all_dates_covered.add(d)
+            expanded_rows.append({'tanggal': d, 'kredit': row["Credit Transaction"], 'narasi': row["Narasi"]})
         elif len(dates) == 2:
             for d in pd.date_range(dates[0], dates[1]):
+                all_dates_covered.add(d.date())
                 expanded_rows.append({'tanggal': d.date(), 'kredit': None, 'narasi': row["Narasi"], 'kredit_grouped': row["Credit Transaction"]})
 
     expanded_bank_df = pd.DataFrame(expanded_rows)
     invoice_per_day = invoice_df.groupby('tanggal')['harga'].sum().reset_index()
 
-    # Transaksi single date
     narasi_single = expanded_bank_df[expanded_bank_df['kredit'].notnull()]
     matched_single = pd.merge(narasi_single, invoice_per_day, on='tanggal', how='left')
-    matched_single['status'] = matched_single.apply(
-        lambda x: "✅ MATCH" if round(x['harga'], 2) == round(x['kredit'], 2) else "❌ MISMATCH", axis=1
-    )
+    matched_single['selisih'] = (matched_single['kredit'] - matched_single['harga']).abs().fillna(matched_single['kredit'])
 
-    # Transaksi multi-date
     narasi_multi = expanded_bank_df[expanded_bank_df['kredit'].isnull()]
     grouped = narasi_multi.groupby('narasi')['tanggal'].apply(list).reset_index()
     grouped = grouped.merge(bank_df[['Narasi', 'Credit Transaction']], left_on='narasi', right_on='Narasi', how='left')
     grouped['total_invoice'] = grouped['tanggal'].apply(
         lambda dates: invoice_per_day[invoice_per_day['tanggal'].isin(dates)]['harga'].sum()
     )
-    grouped['status'] = grouped.apply(
-        lambda x: "✅ MATCH" if round(x['total_invoice'], 2) == round(x['Credit Transaction'], 2) else "❌ MISMATCH", axis=1
-    )
+    grouped['selisih'] = (grouped['Credit Transaction'] - grouped['total_invoice']).abs()
 
-    st.subheader("📊 Ringkasan")
-    colA, colB = st.columns(2)
-    with colA:
-        st.metric("💰 MATCH", f"{(matched_single['status'] == '✅ MATCH').sum() + (grouped['status'] == '✅ MATCH').sum()} transaksi")
-    with colB:
-        st.metric("⚠️ MISMATCH", f"{(matched_single['status'] == '❌ MISMATCH').sum() + (grouped['status'] == '❌ MISMATCH').sum()} transaksi")
+    # Invoice yang tidak tercakup oleh narasi mana pun
+    invoice_df['unmatched'] = ~invoice_df['tanggal'].isin(all_dates_covered)
+    unmatched_invoices = invoice_df[invoice_df['unmatched']]
 
-    # Filter
-    st.sidebar.header("🔍 Filter Hasil")
-    selected_status = st.sidebar.multiselect("Status", ["✅ MATCH", "❌ MISMATCH"], default=["✅ MATCH", "❌ MISMATCH"])
+    st.sidebar.header("🔍 Filter Tanggal")
     start_date = st.sidebar.date_input("Tanggal Awal", value=min(invoice_df['tanggal']))
     end_date = st.sidebar.date_input("Tanggal Akhir", value=max(invoice_df['tanggal']))
 
     filtered_single = matched_single[
-        (matched_single['status'].isin(selected_status)) &
-        (matched_single['tanggal'] >= start_date) &
-        (matched_single['tanggal'] <= end_date)
+        (matched_single['tanggal'] >= start_date) & (matched_single['tanggal'] <= end_date)
     ]
 
     st.subheader("✅ Tabel Transaksi (Tanggal Tunggal)")
-    st.dataframe(filtered_single[['tanggal', 'kredit', 'harga', 'status', 'narasi']])
+    st.dataframe(filtered_single[['tanggal', 'kredit', 'harga', 'selisih', 'narasi']])
     st.download_button("⬇️ Unduh CSV Tanggal Tunggal", filtered_single.to_csv(index=False), file_name="hasil_single.csv")
 
-    filtered_group = grouped[grouped['status'].isin(selected_status)]
-    st.subheader("📆 Tabel Transaksi (Rentang Tanggal Narasi)")
-    st.dataframe(filtered_group[['narasi', 'tanggal', 'Credit Transaction', 'total_invoice', 'status']])
+    filtered_group = grouped.copy()
+    st.subheader("📆 Tabel Transaksi (Rentang Tanggal dari Narasi)")
+    st.dataframe(filtered_group[['narasi', 'tanggal', 'Credit Transaction', 'total_invoice', 'selisih']])
     st.download_button("⬇️ Unduh CSV Rentang Narasi", filtered_group.to_csv(index=False), file_name="hasil_grouped.csv")
+
+    total_selisih = filtered_single['selisih'].sum() + filtered_group['selisih'].sum()
+    st.metric("💸 Total Selisih Semua", f"Rp {total_selisih:,.0f}".replace(",", "."))
+
+    st.subheader("❗ Invoice Tidak Terhubung ke Narasi Manapun")
+    st.dataframe(unmatched_invoices[['tanggal', 'harga', 'nama customer', 'nomer invoice']])
+    st.download_button("⬇️ Unduh Invoice Tidak Cocok", unmatched_invoices.to_csv(index=False), file_name="invoice_unmatched.csv")
 
     st.success("🎉 Rekonsiliasi selesai!")
 
