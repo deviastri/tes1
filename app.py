@@ -1,16 +1,18 @@
-
 import streamlit as st
 import pandas as pd
 import re
 from datetime import datetime
 
 st.set_page_config(page_title="🔍 Rekonsiliasi ASDP", layout="wide")
-st.markdown("""<h1 style='text-align: center;'>📊 Rekonsiliasi Invoice vs Rekening Koran ASDP</h1>""", unsafe_allow_html=True)
+st.markdown("<h1 style='text-align: center;'>📊 Rekonsiliasi Invoice vs Rekening Koran ASDP</h1>", unsafe_allow_html=True)
 st.markdown("<hr>", unsafe_allow_html=True)
 
 def extract_dates(narasi):
     dates = re.findall(r"(\d{8})", str(narasi))
     return [datetime.strptime(d, "%Y%m%d").date() for d in dates]
+
+def format_rupiah(x):
+    return f"Rp {x:,.0f}".replace(",", ".")
 
 st.sidebar.header("📁 Upload File Excel")
 invoice_file = st.sidebar.file_uploader("📄 File Invoice", type=["xlsx"])
@@ -51,13 +53,18 @@ if invoice_file and bank_file:
     matched_single = pd.merge(narasi_single, invoice_per_day, on='tanggal', how='left')
     matched_single['selisih'] = (matched_single['kredit'] - matched_single['harga']).abs().fillna(matched_single['kredit'])
 
+    matched_single['kredit_rp'] = matched_single['kredit'].apply(format_rupiah)
+    matched_single['harga_rp'] = matched_single['harga'].apply(format_rupiah)
+    matched_single['selisih_rp'] = matched_single['selisih'].apply(format_rupiah)
+
     narasi_multi = expanded_bank_df[expanded_bank_df['kredit'].isnull()]
     grouped = narasi_multi.groupby('narasi')['tanggal'].apply(list).reset_index()
     grouped = grouped.merge(bank_df[['Narasi', 'Credit Transaction']], left_on='narasi', right_on='Narasi', how='left')
-    grouped['total_invoice'] = grouped['tanggal'].apply(
-        lambda dates: invoice_per_day[invoice_per_day['tanggal'].isin(dates)]['harga'].sum()
-    )
+    grouped['total_invoice'] = grouped['tanggal'].apply(lambda dates: invoice_per_day[invoice_per_day['tanggal'].isin(dates)]['harga'].sum())
     grouped['selisih'] = (grouped['Credit Transaction'] - grouped['total_invoice']).abs()
+    grouped['total_invoice_rp'] = grouped['total_invoice'].apply(format_rupiah)
+    grouped['credit_rp'] = grouped['Credit Transaction'].apply(format_rupiah)
+    grouped['selisih_rp'] = grouped['selisih'].apply(format_rupiah)
 
     st.sidebar.header("🔍 Filter Tanggal")
     start_date = st.sidebar.date_input("Tanggal Awal", value=min(invoice_df['tanggal']))
@@ -68,13 +75,13 @@ if invoice_file and bank_file:
     ]
 
     st.subheader("✅ Tabel Transaksi (Tanggal Tunggal)")
-    st.dataframe(filtered_single[['tanggal', 'kredit', 'harga', 'selisih', 'narasi']])
-    st.download_button("⬇️ Unduh CSV Tanggal Tunggal", filtered_single.to_csv(index=False), file_name="hasil_single.csv")
+    st.dataframe(filtered_single[['tanggal', 'kredit_rp', 'harga_rp', 'selisih_rp', 'narasi']])
+    st.download_button("⬇️ Unduh CSV Tanggal Tunggal", filtered_single[['tanggal', 'kredit', 'harga', 'selisih', 'narasi']].to_csv(index=False), file_name="hasil_single.csv")
 
     filtered_group = grouped.copy()
     st.subheader("📆 Tabel Transaksi (Rentang Tanggal dari Narasi)")
-    st.dataframe(filtered_group[['narasi', 'tanggal', 'Credit Transaction', 'total_invoice', 'selisih']])
-    st.download_button("⬇️ Unduh CSV Rentang Narasi", filtered_group.to_csv(index=False), file_name="hasil_grouped.csv")
+    st.dataframe(filtered_group[['narasi', 'tanggal', 'credit_rp', 'total_invoice_rp', 'selisih_rp']])
+    st.download_button("⬇️ Unduh CSV Rentang Narasi", filtered_group[['narasi', 'tanggal', 'Credit Transaction', 'total_invoice', 'selisih']].to_csv(index=False), file_name="hasil_grouped.csv")
 
     total_selisih = filtered_single['selisih'].sum() + filtered_group['selisih'].sum()
     st.metric("💸 Total Selisih Semua", f"Rp {total_selisih:,.0f}".replace(",", "."))
