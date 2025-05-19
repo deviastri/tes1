@@ -1,57 +1,99 @@
 
 import streamlit as st
 import pandas as pd
+import re
+from datetime import datetime
 
-st.set_page_config(page_title="Rekonsiliasi Excel - Invoice & Bank", layout="wide")
+st.set_page_config(page_title="Rekonsiliasi ASDP Excel", layout="wide")
+st.title("📊 Rekonsiliasi Invoice & Rekening Koran ASDP (Excel)")
 
-st.title("📊 Rekonsiliasi Data Invoice dan Rekening Koran (Excel Only)")
+# Fungsi parsing tanggal dari narasi rekening koran
+def extract_dates(narasi):
+    dates = re.findall(r"(\d{8})", str(narasi))
+    return [datetime.strptime(d, "%Y%m%d").date() for d in dates]
+
+def expand_narasi_rows(df):
+    rows = []
+    for _, row in df.iterrows():
+        dates = extract_dates(row['narasi'])
+        if not dates:
+            continue
+        if len(dates) == 1:
+            rows.append({'tanggal': dates[0], 'kredit': row['kredit'], 'narasi': row['narasi']})
+        elif len(dates) == 2:
+            start, end = dates
+            while start <= end:
+                rows.append({'tanggal': start, 'kredit': None, 'narasi': row['narasi'], 'id': id})
+                start += pd.Timedelta(days=1)
+    return pd.DataFrame(rows)
 
 col1, col2 = st.columns(2)
 
 with col1:
-    invoice_file = st.file_uploader("📁 Upload File Invoice (.xlsx)", type=["xlsx"], key="invoice")
+    invoice_file = st.file_uploader("📥 Upload Invoice Excel", type=["xlsx"])
 with col2:
-    bank_file = st.file_uploader("🏦 Upload File Rekening Koran (.xlsx)", type=["xlsx"], key="bank")
+    bank_file = st.file_uploader("🏦 Upload Rekening Koran Excel", type=["xlsx"])
 
 if invoice_file and bank_file:
-    try:
-        invoices = pd.read_excel(invoice_file)
-        bank = pd.read_excel(bank_file)
+    invoice_df = pd.read_excel(invoice_file)
+    bank_df = pd.read_excel(bank_file)
 
-        invoices.columns = invoices.columns.str.lower().str.strip()
-        bank.columns = bank.columns.str.lower().str.strip()
+    # Normalisasi kolom invoice
+    invoice_df.columns = invoice_df.columns.str.lower().str.strip()
+    invoice_df['tanggal'] = pd.to_datetime(invoice_df['tanggal inv']).dt.date
+    invoice_df['harga'] = pd.to_numeric(invoice_df['harga'], errors='coerce')
 
-        for df in [invoices, bank]:
-            df['tanggal'] = pd.to_datetime(df['tanggal'], errors='coerce')
-            df['nominal'] = pd.to_numeric(df['nominal'], errors='coerce')
+    # Normalisasi kolom rekening koran
+    bank_df.columns = bank_df.columns.str.lower().str.strip()
+    bank_df = bank_df.rename(columns=lambda x: x.lower())
+    bank_df = bank_df.rename(columns={'kredit': 'kredit', 'narasi': 'narasi'})
+    bank_df = bank_df.dropna(subset=['kredit', 'narasi'])
 
-        matched = pd.merge(
-            invoices, bank,
-            on=['nominal', 'tanggal'],
-            suffixes=('_inv', '_bank')
-        )
+    expanded_rows = []
 
-        unmatched_invoice = invoices[~invoices.apply(tuple, 1).isin(matched[['nominal', 'tanggal']].apply(tuple, 1))]
-        unmatched_bank = bank[~bank.apply(tuple, 1).isin(matched[['nominal', 'tanggal']].apply(tuple, 1))]
+    for _, row in bank_df.iterrows():
+        dates = extract_dates(row['narasi'])
+        if len(dates) == 1:
+            expanded_rows.append({'tanggal': dates[0], 'kredit': row['kredit'], 'narasi': row['narasi']})
+        elif len(dates) == 2:
+            date_range = pd.date_range(start=dates[0], end=dates[1])
+            for d in date_range:
+                expanded_rows.append({'tanggal': d.date(), 'kredit': None, 'narasi': row['narasi'], 'kredit_grouped': row['kredit']})
 
-        st.success("✅ Rekonsiliasi Berhasil")
+    expanded_bank_df = pd.DataFrame(expanded_rows)
 
-        st.subheader("✅ Transaksi Cocok")
-        st.dataframe(matched)
-        st.download_button("⬇️ Unduh Transaksi Cocok", matched.to_csv(index=False), file_name="matched.csv")
+    # Hitung total invoice per tanggal
+    invoice_per_day = invoice_df.groupby('tanggal')['harga'].sum().reset_index()
 
-        st.subheader("❌ Invoice Belum Dibayar")
-        st.dataframe(unmatched_invoice)
-        st.download_button("⬇️ Unduh Invoice Belum Dibayar", unmatched_invoice.to_csv(index=False), file_name="unmatched_invoice.csv")
+    # Gabungkan transaksi narasi single-date
+    narasi_single = expanded_bank_df[expanded_bank_df['kredit'].notnull()]
+    matched_single = pd.merge(narasi_single, invoice_per_day, on='tanggal', how='left')
+    matched_single['status'] = matched_single.apply(
+        lambda x: "MATCH" if round(x['harga'], 2) == round(x['kredit'], 2) else "MISMATCH", axis=1
+    )
 
-        st.subheader("❓ Mutasi Bank Tidak Dikenal")
-        st.dataframe(unmatched_bank)
-        st.download_button("⬇️ Unduh Mutasi Tak Dikenal", unmatched_bank.to_csv(index=False), file_name="unmatched_bank.csv")
+    # Gabungkan transaksi narasi multi-date
+    narasi_multi = expanded_bank_df[expanded_bank_df['kredit'].isnull()]
+    grouped = narasi_multi.groupby('narasi')['tanggal'].apply(list).reset_index()
+    grouped = grouped.merge(
+        bank_df[['narasi', 'kredit']], on='narasi', how='left'
+    ).drop_duplicates()
 
-    except Exception as e:
-        st.error(f"Terjadi kesalahan saat membaca atau memproses file: {e}")
+    def sum_invoice_for_dates(dates):
+        return invoice_per_day[invoice_per_day['tanggal'].isin(dates)]['harga'].sum()
+
+    grouped['total_invoice'] = grouped['tanggal'].apply(sum_invoice_for_dates)
+    grouped['status'] = grouped.apply(
+        lambda x: "MATCH" if round(x['total_invoice'], 2) == round(x['kredit'], 2) else "MISMATCH", axis=1
+    )
+
+    st.subheader("✅ Transaksi Single Date")
+    st.dataframe(matched_single[['tanggal', 'kredit', 'harga', 'status', 'narasi']])
+
+    st.subheader("📆 Transaksi Multi Date (Rentang Tanggal dari Narasi)")
+    st.dataframe(grouped[['narasi', 'tanggal', 'kredit', 'total_invoice', 'status']])
+
+    st.success("Rekonsiliasi selesai! ✅")
 
 else:
-    st.info("Silakan unggah kedua file Excel (.xlsx) untuk memulai rekonsiliasi.")
-
-st.caption("📁 Dibuat dengan ❤️ oleh Code Copilot - Versi Excel Only")
+    st.info("Silakan upload kedua file Excel untuk memulai.")
