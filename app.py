@@ -36,16 +36,12 @@ if invoice_file and bank_file:
     bank_df = bank_df.dropna(subset=["Narasi", "Credit Transaction"])
 
     expanded_rows = []
-    all_dates_covered = set()
     for _, row in bank_df.iterrows():
         dates = extract_dates(row["Narasi"])
         if len(dates) == 1:
-            d = dates[0]
-            all_dates_covered.add(d)
-            expanded_rows.append({'tanggal': d, 'kredit': row["Credit Transaction"], 'narasi': row["Narasi"]})
+            expanded_rows.append({'tanggal': dates[0], 'kredit': row["Credit Transaction"], 'narasi': row["Narasi"]})
         elif len(dates) == 2:
             for d in pd.date_range(dates[0], dates[1]):
-                all_dates_covered.add(d.date())
                 expanded_rows.append({'tanggal': d.date(), 'kredit': None, 'narasi': row["Narasi"], 'kredit_grouped': row["Credit Transaction"]})
 
     expanded_bank_df = pd.DataFrame(expanded_rows)
@@ -62,10 +58,6 @@ if invoice_file and bank_file:
         lambda dates: invoice_per_day[invoice_per_day['tanggal'].isin(dates)]['harga'].sum()
     )
     grouped['selisih'] = (grouped['Credit Transaction'] - grouped['total_invoice']).abs()
-
-    # Invoice yang tidak tercakup oleh narasi mana pun
-    invoice_df['unmatched'] = ~invoice_df['tanggal'].isin(all_dates_covered)
-    unmatched_invoices = invoice_df[invoice_df['unmatched']]
 
     st.sidebar.header("🔍 Filter Tanggal")
     start_date = st.sidebar.date_input("Tanggal Awal", value=min(invoice_df['tanggal']))
@@ -86,10 +78,6 @@ if invoice_file and bank_file:
 
     total_selisih = filtered_single['selisih'].sum() + filtered_group['selisih'].sum()
     st.metric("💸 Total Selisih Semua", f"Rp {total_selisih:,.0f}".replace(",", "."))
-
-    st.subheader("❗ Invoice Tidak Terhubung ke Narasi Manapun")
-    st.dataframe(unmatched_invoices[['tanggal', 'harga', 'nama customer', 'nomer invoice']])
-    st.download_button("⬇️ Unduh Invoice Tidak Cocok", unmatched_invoices.to_csv(index=False), file_name="invoice_unmatched.csv")
 
     st.success("🎉 Rekonsiliasi selesai!")
 
