@@ -7,25 +7,9 @@ from datetime import datetime
 st.set_page_config(page_title="Rekonsiliasi ASDP Excel", layout="wide")
 st.title("📊 Rekonsiliasi Invoice & Rekening Koran ASDP (Excel)")
 
-# Fungsi parsing tanggal dari narasi rekening koran
 def extract_dates(narasi):
     dates = re.findall(r"(\d{8})", str(narasi))
     return [datetime.strptime(d, "%Y%m%d").date() for d in dates]
-
-def expand_narasi_rows(df):
-    rows = []
-    for _, row in df.iterrows():
-        dates = extract_dates(row['narasi'])
-        if not dates:
-            continue
-        if len(dates) == 1:
-            rows.append({'tanggal': dates[0], 'kredit': row['kredit'], 'narasi': row['narasi']})
-        elif len(dates) == 2:
-            start, end = dates
-            while start <= end:
-                rows.append({'tanggal': start, 'kredit': None, 'narasi': row['narasi'], 'id': id})
-                start += pd.Timedelta(days=1)
-    return pd.DataFrame(rows)
 
 col1, col2 = st.columns(2)
 
@@ -38,62 +22,59 @@ if invoice_file and bank_file:
     invoice_df = pd.read_excel(invoice_file)
     bank_df = pd.read_excel(bank_file)
 
-    # Normalisasi kolom invoice
     invoice_df.columns = invoice_df.columns.str.lower().str.strip()
     invoice_df['tanggal'] = pd.to_datetime(invoice_df['tanggal inv']).dt.date
     invoice_df['harga'] = pd.to_numeric(invoice_df['harga'], errors='coerce')
 
-    # Normalisasi kolom rekening koran
-    bank_df.columns = bank_df.columns.str.lower().str.strip()
-    bank_df = bank_df.rename(columns=lambda x: x.lower())
-    bank_df = bank_df.rename(columns={'kredit': 'kredit', 'narasi': 'narasi'})
-    bank_df = bank_df.dropna(subset=['kredit', 'narasi'])
+    # Pastikan nama kolom rekening koran sesuai
+    bank_df.columns = bank_df.columns.str.strip()
+    if "Narasi" not in bank_df.columns or "Credit Transaction" not in bank_df.columns:
+        st.error("Kolom 'Narasi' atau 'Credit Transaction' tidak ditemukan.")
+        st.stop()
+
+    # Ambil dan ekspansi berdasarkan narasi
+    bank_df['Narasi'] = bank_df['Narasi'].astype(str)
+    bank_df['Credit Transaction'] = pd.to_numeric(bank_df['Credit Transaction'], errors='coerce')
+    bank_df = bank_df.dropna(subset=["Narasi", "Credit Transaction"])
 
     expanded_rows = []
-
     for _, row in bank_df.iterrows():
-        dates = extract_dates(row['narasi'])
+        dates = extract_dates(row["Narasi"])
         if len(dates) == 1:
-            expanded_rows.append({'tanggal': dates[0], 'kredit': row['kredit'], 'narasi': row['narasi']})
+            expanded_rows.append({'tanggal': dates[0], 'kredit': row["Credit Transaction"], 'narasi': row["Narasi"]})
         elif len(dates) == 2:
             date_range = pd.date_range(start=dates[0], end=dates[1])
             for d in date_range:
-                expanded_rows.append({'tanggal': d.date(), 'kredit': None, 'narasi': row['narasi'], 'kredit_grouped': row['kredit']})
+                expanded_rows.append({'tanggal': d.date(), 'kredit': None, 'narasi': row["Narasi"], 'kredit_grouped': row["Credit Transaction"]})
 
     expanded_bank_df = pd.DataFrame(expanded_rows)
 
-    # Hitung total invoice per tanggal
+    # Invoice total per tanggal
     invoice_per_day = invoice_df.groupby('tanggal')['harga'].sum().reset_index()
 
-    # Gabungkan transaksi narasi single-date
+    # Cocokkan transaksi single-date
     narasi_single = expanded_bank_df[expanded_bank_df['kredit'].notnull()]
     matched_single = pd.merge(narasi_single, invoice_per_day, on='tanggal', how='left')
     matched_single['status'] = matched_single.apply(
         lambda x: "MATCH" if round(x['harga'], 2) == round(x['kredit'], 2) else "MISMATCH", axis=1
     )
 
-    # Gabungkan transaksi narasi multi-date
+    # Cocokkan transaksi multi-date
     narasi_multi = expanded_bank_df[expanded_bank_df['kredit'].isnull()]
     grouped = narasi_multi.groupby('narasi')['tanggal'].apply(list).reset_index()
-    grouped = grouped.merge(
-        bank_df[['narasi', 'kredit']], on='narasi', how='left'
-    ).drop_duplicates()
-
-    def sum_invoice_for_dates(dates):
-        return invoice_per_day[invoice_per_day['tanggal'].isin(dates)]['harga'].sum()
-
-    grouped['total_invoice'] = grouped['tanggal'].apply(sum_invoice_for_dates)
+    grouped = grouped.merge(bank_df[['Narasi', 'Credit Transaction']], left_on='narasi', right_on='Narasi', how='left')
+    grouped['total_invoice'] = grouped['tanggal'].apply(lambda dates: invoice_per_day[invoice_per_day['tanggal'].isin(dates)]['harga'].sum())
     grouped['status'] = grouped.apply(
-        lambda x: "MATCH" if round(x['total_invoice'], 2) == round(x['kredit'], 2) else "MISMATCH", axis=1
+        lambda x: "MATCH" if round(x['total_invoice'], 2) == round(x['Credit Transaction'], 2) else "MISMATCH", axis=1
     )
 
     st.subheader("✅ Transaksi Single Date")
     st.dataframe(matched_single[['tanggal', 'kredit', 'harga', 'status', 'narasi']])
 
     st.subheader("📆 Transaksi Multi Date (Rentang Tanggal dari Narasi)")
-    st.dataframe(grouped[['narasi', 'tanggal', 'kredit', 'total_invoice', 'status']])
+    st.dataframe(grouped[['narasi', 'tanggal', 'Credit Transaction', 'total_invoice', 'status']])
 
-    st.success("Rekonsiliasi selesai! ✅")
+    st.success("Rekonsiliasi selesai!")
 
 else:
     st.info("Silakan upload kedua file Excel untuk memulai.")
