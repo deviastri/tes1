@@ -20,21 +20,20 @@ with col2:
 
 if invoice_file and bank_file:
     invoice_df = pd.read_excel(invoice_file)
-    bank_df = pd.read_excel(bank_file)
+    bank_df = pd.read_excel(bank_file, header=11)  # Baca mulai baris ke-12
 
     invoice_df.columns = invoice_df.columns.str.lower().str.strip()
     invoice_df['tanggal'] = pd.to_datetime(invoice_df['tanggal inv']).dt.date
     invoice_df['harga'] = pd.to_numeric(invoice_df['harga'], errors='coerce')
 
-    # Pastikan nama kolom rekening koran sesuai
     bank_df.columns = bank_df.columns.str.strip()
     if "Narasi" not in bank_df.columns or "Credit Transaction" not in bank_df.columns:
         st.error("Kolom 'Narasi' atau 'Credit Transaction' tidak ditemukan.")
         st.stop()
 
-    # Ambil dan ekspansi berdasarkan narasi
     bank_df['Narasi'] = bank_df['Narasi'].astype(str)
-    bank_df['Credit Transaction'] = pd.to_numeric(bank_df['Credit Transaction'], errors='coerce')
+    # Bersihkan format angka dari koma dan titik
+    bank_df['Credit Transaction'] = bank_df['Credit Transaction'].astype(str).str.replace(",", "").astype(float)
     bank_df = bank_df.dropna(subset=["Narasi", "Credit Transaction"])
 
     expanded_rows = []
@@ -49,17 +48,16 @@ if invoice_file and bank_file:
 
     expanded_bank_df = pd.DataFrame(expanded_rows)
 
-    # Invoice total per tanggal
     invoice_per_day = invoice_df.groupby('tanggal')['harga'].sum().reset_index()
 
-    # Cocokkan transaksi single-date
+    # Transaksi 1 tanggal
     narasi_single = expanded_bank_df[expanded_bank_df['kredit'].notnull()]
     matched_single = pd.merge(narasi_single, invoice_per_day, on='tanggal', how='left')
     matched_single['status'] = matched_single.apply(
         lambda x: "MATCH" if round(x['harga'], 2) == round(x['kredit'], 2) else "MISMATCH", axis=1
     )
 
-    # Cocokkan transaksi multi-date
+    # Transaksi rentang tanggal
     narasi_multi = expanded_bank_df[expanded_bank_df['kredit'].isnull()]
     grouped = narasi_multi.groupby('narasi')['tanggal'].apply(list).reset_index()
     grouped = grouped.merge(bank_df[['Narasi', 'Credit Transaction']], left_on='narasi', right_on='Narasi', how='left')
