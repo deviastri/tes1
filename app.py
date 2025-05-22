@@ -92,3 +92,44 @@ if menu == "Dashboard":
 
 
 
+
+
+elif menu == "Tiket Terjual":
+    st.title("🎟️ Tiket Terjual")
+
+    files = st.file_uploader("Upload File Tiket (boleh banyak)", type=["xlsx"], accept_multiple_files=True)
+    if files:
+        hasil = []
+        semua_tanggal = []
+
+        for f in files:
+            try:
+                df_raw = pd.read_excel(f, header=None)
+                pelabuhan = str(df_raw.iloc[2, 1]).strip().upper()
+                jumlah = pd.to_numeric(df_raw.iloc[11:, 4].dropna().iloc[-1], errors='coerce')
+                tanggal = pd.to_datetime(df_raw.iloc[11:, 2].dropna(), errors='coerce')
+                if not tanggal.empty:
+                    semua_tanggal.append(tanggal.min().date())
+                    semua_tanggal.append(tanggal.max().date())
+                if pd.notnull(jumlah):
+                    hasil.append({'Pelabuhan Asal': pelabuhan, 'Jumlah': int(jumlah)})
+            except Exception as e:
+                st.error(f"❌ Gagal memproses {f.name}: {e}")
+
+        if hasil:
+            if semua_tanggal:
+                p1 = min(semua_tanggal)
+                p2 = max(semua_tanggal)
+                st.markdown(f"**Periode: {p1.strftime('%d %B %Y')} s.d. {p2.strftime('%d %B %Y')}**")
+
+            df = pd.DataFrame(hasil)
+            urutan = ['MERAK', 'BAKAUHENI', 'KETAPANG', 'GILIMANUK']
+            df = df.groupby('Pelabuhan Asal')['Jumlah'].sum().reindex(urutan, fill_value=0).reset_index()
+            total = df['Jumlah'].sum()
+            df['Jumlah'] = df['Jumlah'].apply(lambda x: f"Rp {x:,.0f}".replace(",", "."))
+            df = pd.concat([df, pd.DataFrame([{'Pelabuhan Asal': 'TOTAL', 'Jumlah': f"Rp {total:,.0f}".replace(",", ".")}])])
+            st.dataframe(df.style.set_properties(subset=['Jumlah'], **{'text-align': 'right'}), use_container_width=True)
+        else:
+            st.warning("Tidak ada data valid ditemukan.")
+    else:
+        st.info("Silakan upload file tiket.")
