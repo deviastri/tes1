@@ -88,3 +88,7 @@ if menu == "Dashboard":
 
     df_rekap = pd.concat([df_rekap, pd.DataFrame([total])], ignore_index=True)
     st.dataframe(df_rekap, use_container_width=True)
+
+
+
+
