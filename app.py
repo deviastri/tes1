@@ -17,6 +17,7 @@ MENU_ITEMS = [
 ]
 menu = st.sidebar.radio("Pilih Halaman", MENU_ITEMS)
 
+
 if menu == "Dashboard":
     st.title("📊 Dashboard Rekapitulasi Sales Channel")
     st.markdown("### Pilih Periode untuk Masing-Masing Komponen")
@@ -88,12 +89,6 @@ if menu == "Dashboard":
 
     df_rekap = pd.concat([df_rekap, pd.DataFrame([total])], ignore_index=True)
     st.dataframe(df_rekap, use_container_width=True)
-
-
-
-
-
-
 elif menu == "Tiket Terjual":
     st.title("🎟️ Tiket Terjual")
 
