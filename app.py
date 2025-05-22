@@ -129,10 +129,10 @@ elif menu == "Tiket Terjual":
             df['Jumlah'] = df['Jumlah'].apply(lambda x: f"Rp {x:,.0f}".replace(",", "."))
             df = pd.concat([df, pd.DataFrame([{'Pelabuhan Asal': 'TOTAL', 'Jumlah': f"Rp {total:,.0f}".replace(",", ".")}])])
             st.dataframe(df.style.set_properties(subset=['Jumlah'], **{'text-align': 'right'}), use_container_width=True)
-        else:
-            st.warning("Tidak ada data valid ditemukan.")
     else:
-        st.info("Silakan upload file tiket.")
+        st.warning("Tidak ada data valid ditemukan.")
+else:
+    st.info("Silakan upload file tiket.")
 
 
 elif menu == "Penambahan & Pengurangan":
