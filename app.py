@@ -133,3 +133,170 @@ elif menu == "Tiket Terjual":
             st.warning("Tidak ada data valid ditemukan.")
     else:
         st.info("Silakan upload file tiket.")
+
+
+elif menu == "Penambahan & Pengurangan":
+    st.title("📈 Penambahan dan 📉 Pengurangan Tarif")
+
+    file = st.file_uploader("Upload File Excel (boarding pass)", type=["xlsx"])
+    if file:
+        try:
+            df = pd.read_excel(file)
+            df.columns = df.columns.str.strip().str.upper()
+
+            df['JAM'] = pd.to_numeric(df['JAM'], errors='coerce')
+            df['CETAK BOARDING PASS'] = pd.to_datetime(df['CETAK BOARDING PASS'], errors='coerce')
+            df['ASAL'] = df['ASAL'].str.upper().str.strip()
+            df['TARIF'] = pd.to_numeric(df['TARIF'], errors='coerce')
+
+            df = df[df['JAM'].between(0, 7)]
+            df = df.dropna(subset=['CETAK BOARDING PASS'])
+
+            col1, col2 = st.columns(2)
+            with col1:
+                tanggal_penambahan = st.date_input("Tanggal Penambahan", key="tgl_penambahan")
+            with col2:
+                tanggal_pengurangan = st.date_input("Tanggal Pengurangan", key="tgl_pengurangan")
+
+            pelabuhan = ['MERAK', 'BAKAUHENI', 'KETAPANG', 'GILIMANUK']
+            df_p = df[df['CETAK BOARDING PASS'].dt.date == tanggal_penambahan]
+            df_m = df[df['CETAK BOARDING PASS'].dt.date == tanggal_pengurangan]
+
+            p_group = df_p.groupby('ASAL')['TARIF'].sum().reindex(pelabuhan, fill_value=0)
+            m_group = df_m.groupby('ASAL')['TARIF'].sum().reindex(pelabuhan, fill_value=0)
+
+            df_final = pd.DataFrame({
+                'Pelabuhan Asal': pelabuhan,
+                'Penambahan': p_group.values,
+                'Pengurangan': m_group.values
+            })
+
+            for col in ['Penambahan', 'Pengurangan']:
+                df_final[col] = df_final[col].apply(lambda x: f"Rp {x:,.0f}".replace(",", "."))
+
+            total_row = {
+                'Pelabuhan Asal': 'TOTAL',
+                'Penambahan': f"Rp {p_group.sum():,.0f}".replace(",", "."),
+                'Pengurangan': f"Rp {m_group.sum():,.0f}".replace(",", ".")
+            }
+
+            df_final = pd.concat([df_final, pd.DataFrame([total_row])], ignore_index=True)
+            st.dataframe(df_final, use_container_width=True)
+        except Exception as e:
+            st.error(f"Gagal memproses file: {e}")
+    else:
+        st.info("Silakan upload file boarding pass.")
+
+
+elif menu == "Naik/Turun Golongan":
+    st.title("🚐 Naik/Turun Golongan")
+
+    f_inv = st.file_uploader("Upload File Invoice", type=["xlsx"], key="gol_inv")
+    f_tik = st.file_uploader("Upload File Tiket Summary", type=["xlsx"], key="gol_tik")
+
+    if f_inv and f_tik:
+        try:
+            df_inv = pd.read_excel(f_inv, header=1)
+            df_tik = pd.read_excel(f_tik, header=1)
+
+            df_inv.columns = df_inv.columns.str.upper().str.strip()
+            df_tik.columns = df_tik.columns.str.upper().str.strip()
+
+            invoice_col = 'NOMER INVOICE' if 'NOMER INVOICE' in df_inv.columns else 'NOMOR INVOICE'
+            df_inv['INVOICE'] = df_inv[invoice_col].astype(str).str.strip()
+            df_tik['INVOICE'] = df_tik['NOMOR INVOICE'].astype(str).str.strip()
+
+            df_inv['NILAI'] = pd.to_numeric(df_inv['HARGA'], errors='coerce')
+            df_tik['NILAI'] = pd.to_numeric(df_tik['TARIF'], errors='coerce') * -1
+
+            df1 = df_inv[['INVOICE', 'KEBERANGKATAN', 'NILAI']].rename(columns={'KEBERANGKATAN': 'Pelabuhan'})
+            df2 = df_tik[['INVOICE', 'NILAI']]
+            df2['Pelabuhan'] = None
+
+            df_all = pd.concat([df1, df2], ignore_index=True)
+            df_all['Pelabuhan'] = df_all['Pelabuhan'].fillna(method='ffill')
+            df_all['Pelabuhan'] = df_all['Pelabuhan'].str.upper().str.strip()
+
+            df_group = df_all.groupby(['INVOICE', 'Pelabuhan'])['NILAI'].sum().reset_index()
+            df_filtered = df_group[df_group['Pelabuhan'].isin(['MERAK', 'BAKAUHENI', 'KETAPANG', 'GILIMANUK'])]
+
+            df_sum = df_filtered.groupby('Pelabuhan')['NILAI'].sum().reset_index()
+            df_sum = df_sum[df_sum['NILAI'] != 0]
+            df_sum['Keterangan'] = df_sum['NILAI'].apply(lambda x: "Turun Golongan" if x > 0 else "Naik Golongan")
+            df_sum['Selisih Naik/Turun Golongan'] = df_sum['NILAI'].apply(lambda x: f"Rp {x:,.0f}".replace(",", "."))
+            df_sum = df_sum[['Pelabuhan', 'Selisih Naik/Turun Golongan', 'Keterangan']].rename(columns={'Pelabuhan': 'Pelabuhan Asal'})
+
+            total = df_filtered['NILAI'].sum()
+            df_total = pd.DataFrame([{
+                'Pelabuhan Asal': 'TOTAL',
+                'Selisih Naik/Turun Golongan': f"Rp {total:,.0f}".replace(",", "."),
+                'Keterangan': ''
+            }])
+
+            df_final = pd.concat([df_sum, df_total], ignore_index=True)
+            st.dataframe(df_final, use_container_width=True)
+        except Exception as e:
+            st.error(f"Gagal memproses file: {e}")
+    else:
+        st.info("Silakan upload file invoice dan tiket.")
+
+
+elif menu == "Rekonsiliasi":
+    st.title("💸 Rekonsiliasi Invoice vs Rekening")
+
+    f_inv = st.file_uploader("Upload File Invoice", type=["xlsx"], key="rinv")
+    f_bank = st.file_uploader("Upload File Rekening Koran", type=["xlsx"], key="rbank")
+
+    if f_inv and f_bank:
+        try:
+            df_inv = pd.read_excel(f_inv)
+            df_bank = pd.read_excel(f_bank, skiprows=11)
+
+            df_inv.columns = df_inv.columns.str.lower().str.strip()
+            df_bank.columns = df_bank.columns.str.lower().str.strip()
+
+            df_inv = df_inv[['tanggal invoice', 'harga']].dropna()
+            df_inv['tanggal invoice'] = pd.to_datetime(df_inv['tanggal invoice'], errors='coerce')
+            df_inv['harga'] = pd.to_numeric(df_inv['harga'], errors='coerce')
+            df_inv['tanggal'] = df_inv['tanggal invoice'].dt.date
+
+            df_bank = df_bank[['narasi', 'credit transaction']].dropna()
+            df_bank['credit transaction'] = pd.to_numeric(df_bank['credit transaction'], errors='coerce')
+
+            records = []
+            for _, row in df_bank.iterrows():
+                narasi = str(row['narasi'])
+                kredit = row['credit transaction']
+                tanggal_r = None
+                invoice_total = 0
+
+                match = re.search(r'(20\d{6})\s*[-–]?\s*(20\d{6})?', narasi)
+                if match:
+                    start = pd.to_datetime(match.group(1), format='%Y%m%d', errors='coerce')
+                    end = pd.to_datetime(match.group(2), format='%Y%m%d', errors='coerce') if match.group(2) else start
+                    if pd.notnull(start) and pd.notnull(end):
+                        rng = pd.date_range(start, end)
+                        invoice_total = df_inv[df_inv['tanggal'].isin(rng.date)]['harga'].sum()
+                        tanggal_r = start.date()
+
+                if tanggal_r:
+                    selisih = invoice_total - kredit
+                    records.append({
+                        'Tanggal': tanggal_r,
+                        'Narasi': narasi,
+                        'Nominal Kredit': kredit,
+                        'Nominal Invoice': invoice_total,
+                        'Selisih': selisih
+                    })
+
+            df_rekon = pd.DataFrame(records)
+            df_rekon[['Nominal Kredit', 'Nominal Invoice', 'Selisih']] = df_rekon[['Nominal Kredit', 'Nominal Invoice', 'Selisih']].fillna(0)
+            for col in ['Nominal Kredit', 'Nominal Invoice', 'Selisih']:
+                df_rekon[col] = df_rekon[col].apply(lambda x: f"Rp {x:,.0f}".replace(",", "."))
+
+            styled = df_rekon.style.set_properties(subset=['Nominal Kredit', 'Nominal Invoice', 'Selisih'], **{'text-align': 'right'})
+            st.dataframe(styled, use_container_width=True)
+        except Exception as e:
+            st.error(f"Gagal memproses file: {e}")
+    else:
+        st.info("Silakan upload file invoice dan rekening.")
