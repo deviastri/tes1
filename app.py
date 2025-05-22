@@ -25,7 +25,7 @@ if invoice_file and bank_file:
     bank_df = pd.read_excel(bank_file, header=11)
 
     invoice_df.columns = invoice_df.columns.str.lower().str.strip()
-    invoice_df['tanggal'] = pd.to_datetime(invoice_df['tanggal inv']).dt.date
+    invoice_df['tanggal'] = pd.to_datetime(invoice_df['tanggal invoice']).dt.date
     invoice_df['harga'] = pd.to_numeric(invoice_df['harga'], errors='coerce')
 
     bank_df.columns = bank_df.columns.str.strip()
